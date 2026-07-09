@@ -20,14 +20,27 @@ parcels (stray roads, symbols, dashes that happen to close up) - most
 notably the title-block/legend artwork (compass rose, scale-bar ticks,
 legend-table icons) these survey sheets draw in a corner, and the small
 reference-point/building/canal markers sprinkled across the map itself (see
-the sheet's own "નિશાની" legend). A second filter catches those: real
-parcels are hand-surveyed to tile the map edge-to-edge, so every one sits
-right up against several neighbors, while legend artwork and scattered
-markers sit alone in their own patch of whitespace - `filter_isolated` drops
-any candidate that doesn't have at least `--min-neighbors` others touching
-its bounding box (pass `--min-neighbors 0` to disable this if it drops real
-parcels on a sparser map). It still isn't foolproof and misses real parcels
-drawn unusually. Labeling and cleanup are left entirely to a
+the sheet's own "નિશાની" legend). Two more filters catch those:
+
+  - Real parcels are hand-surveyed to tile the map edge-to-edge, so every
+    one sits right up against several neighbors, while legend artwork and
+    scattered markers sit alone in their own patch of whitespace -
+    `filter_isolated` drops any candidate that doesn't have at least
+    `--min-neighbors` others touching its bounding box.
+  - Symbols (trees, buildings, wells, ...) are a fixed template stamped at
+    many different spots on the sheet, so the exact same shape - same
+    vertex offsets, just translated - reappears dozens of times; a
+    hand-surveyed parcel boundary is for all practical purposes never
+    identical to another one. `filter_repeated_shapes` drops any candidate
+    whose shape (position-independent) recurs more than `--max-shape-repeats`
+    times. This is what catches symbols sitting *inside* the parcel area
+    (e.g. a tree drawn within someone's plot), which have plenty of
+    real-parcel neighbors and so survive the isolation filter above.
+
+Pass `--min-neighbors 0` / `--max-shape-repeats 0` to disable either filter
+if it drops real parcels on a given map. Even together they're not
+foolproof and still miss real parcels drawn unusually. Labeling and cleanup
+are left entirely to a
 human from the frontend's plot editor (rename, delete, or hand-draw a
 polygon for anything the geometry filter missed) rather than attempted here
 - reading the plot numbers automatically was tried (clustering the tiny
@@ -78,7 +91,7 @@ re-running with different thresholds.
 import argparse
 import json
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 try:
@@ -190,6 +203,27 @@ def filter_isolated(rings, min_neighbors=3, margin=3.0):
     return [r for r, c in zip(rings, counts) if c >= min_neighbors]
 
 
+def normalize_shape(ring, tolerance=0.5):
+    """Translate a ring to its own bounding-box corner and round to
+    `tolerance` points, so the same symbol stamped at two different spots on
+    the page hashes identically regardless of where it sits - see
+    filter_repeated_shapes."""
+    minx = min(x for x, _ in ring)
+    miny = min(y for _, y in ring)
+    return tuple((round((x - minx) / tolerance), round((y - miny) / tolerance)) for x, y in ring)
+
+
+def filter_repeated_shapes(rings, max_repeats=4, tolerance=0.5):
+    """Drop rings whose shape (position-independent) recurs more than
+    `max_repeats` times elsewhere on the page - see the module docstring for
+    why that means "symbol template", not "parcel"."""
+    if max_repeats <= 0:
+        return rings
+    sigs = [normalize_shape(r, tolerance) for r in rings]
+    counts = Counter(sigs)
+    return [r for r, s in zip(rings, sigs) if counts[s] <= max_repeats]
+
+
 def content_bbox(page):
     objs = page.lines + page.rects + page.curves
     xs0 = [o["x0"] for o in objs]
@@ -221,6 +255,10 @@ def main():
                          "markers, which sit alone, since real parcels tile the map edge-to-edge. Set to 0 to disable (default: 3)")
     ap.add_argument("--neighbor-margin", type=float, default=3.0,
                     help="PDF-point margin used to decide whether two candidates' bounding boxes touch, for --min-neighbors (default: 3.0)")
+    ap.add_argument("--max-shape-repeats", type=int, default=4,
+                    help="drop candidates whose exact shape (position-independent) recurs more than this many times "
+                         "elsewhere on the page - filters out symbols (trees, buildings, wells, ...) stamped as "
+                         "repeated copies of the same template. Set to 0 to disable (default: 4)")
     args = ap.parse_args()
 
     if not args.pdf.exists():
@@ -245,6 +283,14 @@ def main():
         deduped = dedupe_rings(rings)
         dupes_dropped = len(rings) - len(deduped)
         rings = deduped
+
+        repeats_filtered = filter_repeated_shapes(rings, args.max_shape_repeats)
+        repeats_dropped = len(rings) - len(repeats_filtered)
+        rings = repeats_filtered
+        if not rings:
+            sys.exit(
+                f"--max-shape-repeats {args.max_shape_repeats} dropped every candidate. Raise it (or pass 0 to disable) and re-run."
+            )
 
         isolated_filtered = filter_isolated(rings, args.min_neighbors, args.neighbor_margin)
         isolated_dropped = len(rings) - len(isolated_filtered)
@@ -285,6 +331,8 @@ def main():
     notes = []
     if dupes_dropped:
         notes.append(f"{dupes_dropped} exact-duplicate curve(s) dropped")
+    if repeats_dropped:
+        notes.append(f"{repeats_dropped} repeated-symbol shape(s) dropped (trees, buildings, wells, ...)")
     if isolated_dropped:
         notes.append(f"{isolated_dropped} isolated shape(s) dropped as likely legend/marker artwork, not parcels")
     note = f" ({'; '.join(notes)})" if notes else ""
