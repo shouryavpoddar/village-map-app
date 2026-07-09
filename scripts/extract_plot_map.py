@@ -16,8 +16,18 @@ or filled paths, so a few simple filters isolate the parcel outlines:
   3. vertex count and bounding-box area inside a plausible parcel range
 
 That geometric filter alone still lets through shapes that aren't really
-parcels (stray roads, symbols, dashes that happen to close up), and misses
-real parcels drawn unusually. Labeling and cleanup are left entirely to a
+parcels (stray roads, symbols, dashes that happen to close up) - most
+notably the title-block/legend artwork (compass rose, scale-bar ticks,
+legend-table icons) these survey sheets draw in a corner, and the small
+reference-point/building/canal markers sprinkled across the map itself (see
+the sheet's own "નિશાની" legend). A second filter catches those: real
+parcels are hand-surveyed to tile the map edge-to-edge, so every one sits
+right up against several neighbors, while legend artwork and scattered
+markers sit alone in their own patch of whitespace - `filter_isolated` drops
+any candidate that doesn't have at least `--min-neighbors` others touching
+its bounding box (pass `--min-neighbors 0` to disable this if it drops real
+parcels on a sparser map). It still isn't foolproof and misses real parcels
+drawn unusually. Labeling and cleanup are left entirely to a
 human from the frontend's plot editor (rename, delete, or hand-draw a
 polygon for anything the geometry filter missed) rather than attempted here
 - reading the plot numbers automatically was tried (clustering the tiny
@@ -68,6 +78,7 @@ re-running with different thresholds.
 import argparse
 import json
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 try:
@@ -130,6 +141,55 @@ def dedupe_rings(rings):
     return deduped
 
 
+def count_neighbors(rings, margin=3.0, cell_size=40.0):
+    """For each ring, count how many *other* candidate rings have a bounding
+    box that overlaps its own once expanded by `margin` points. Real parcels
+    are hand-surveyed to tile the map edge-to-edge, so every one of them sits
+    right up against several neighbors; the title-block/legend artwork
+    (compass rose, scale-bar ticks, table-cell icons) and the small
+    reference-point/building/canal markers sprinkled across the map proper
+    (see the "નિશાની" legend) all sit alone in their own patch of
+    whitespace and touch none. Grid-bucketed so this stays roughly linear
+    instead of comparing every ring against every other one.
+    """
+    boxes = [bbox_of(r) for r in rings]
+
+    def cells_for(b):
+        x0, y0, x1, y1 = b
+        return (range(int(x0 // cell_size), int(x1 // cell_size) + 1),
+                range(int(y0 // cell_size), int(y1 // cell_size) + 1))
+
+    grid = defaultdict(list)
+    for i, b in enumerate(boxes):
+        cxs, cys = cells_for(b)
+        for gx in cxs:
+            for gy in cys:
+                grid[(gx, gy)].append(i)
+
+    counts = [0] * len(rings)
+    for i, (x0, y0, x1, y1) in enumerate(boxes):
+        eb = (x0 - margin, y0 - margin, x1 + margin, y1 + margin)
+        cxs, cys = cells_for(eb)
+        candidates = {j for gx in cxs for gy in cys for j in grid.get((gx, gy), ())}
+        candidates.discard(i)
+        for j in candidates:
+            ox0, oy0, ox1, oy1 = boxes[j]
+            if eb[0] < ox1 and eb[2] > ox0 and eb[1] < oy1 and eb[3] > oy0:
+                counts[i] += 1
+    return counts
+
+
+def filter_isolated(rings, min_neighbors=3, margin=3.0):
+    """Drop rings that don't sit adjacent to at least `min_neighbors` other
+    candidates - see count_neighbors() for why that separates real parcels
+    from legend/title-block artwork and scattered point markers, without
+    needing to know where on the page those happen to be drawn."""
+    if min_neighbors <= 0:
+        return rings
+    counts = count_neighbors(rings, margin)
+    return [r for r, c in zip(rings, counts) if c >= min_neighbors]
+
+
 def content_bbox(page):
     objs = page.lines + page.rects + page.curves
     xs0 = [o["x0"] for o in objs]
@@ -150,11 +210,17 @@ def main():
     ap.add_argument("--page", type=int, default=0, help="0-indexed page number (default: 0)")
     ap.add_argument("--dpi", type=int, default=400, help="render resolution for the background PNG (default: 400)")
     ap.add_argument("--out-dir", type=Path, default=None,
-                     help="output directory (default: src/assets/villages/<pdf-stem>/)")
+                    help="output directory (default: src/assets/villages/<pdf-stem>/)")
     ap.add_argument("--min-vertices", type=int, default=4, help="minimum polygon vertex count (default: 4)")
     ap.add_argument("--max-vertices", type=int, default=60, help="maximum polygon vertex count (default: 60)")
     ap.add_argument("--min-side", type=float, default=2.0, help="minimum bbox side in PDF points, filters out tiny specks (default: 2.0)")
     ap.add_argument("--max-side", type=float, default=200.0, help="maximum bbox side in PDF points, filters out large non-parcel shapes (default: 200.0)")
+    ap.add_argument("--min-neighbors", type=int, default=3,
+                    help="drop candidates with fewer than this many other candidates touching their bounding box "
+                         "(within --neighbor-margin) - filters out legend/title-block artwork and scattered point "
+                         "markers, which sit alone, since real parcels tile the map edge-to-edge. Set to 0 to disable (default: 3)")
+    ap.add_argument("--neighbor-margin", type=float, default=3.0,
+                    help="PDF-point margin used to decide whether two candidates' bounding boxes touch, for --min-neighbors (default: 3.0)")
     args = ap.parse_args()
 
     if not args.pdf.exists():
@@ -179,6 +245,14 @@ def main():
         deduped = dedupe_rings(rings)
         dupes_dropped = len(rings) - len(deduped)
         rings = deduped
+
+        isolated_filtered = filter_isolated(rings, args.min_neighbors, args.neighbor_margin)
+        isolated_dropped = len(rings) - len(isolated_filtered)
+        rings = isolated_filtered
+        if not rings:
+            sys.exit(
+                f"--min-neighbors {args.min_neighbors} dropped every candidate. Lower it (or pass 0 to disable) and re-run."
+            )
 
         plots = [
             {"id": i + 1, "label": "", "points": [[round(x, 2), round(y, 2)] for x, y in ring]}
@@ -208,8 +282,13 @@ def main():
     png_path = out_dir / f"{stem}-map.png"
     image.save(png_path)
 
-    dupe_note = f" ({dupes_dropped} exact-duplicate curve(s) dropped)" if dupes_dropped else ""
-    print(f"Found {len(plots)} candidate plot(s){dupe_note}, all unlabeled - label, delete, or hand-draw missing ones from the frontend.")
+    notes = []
+    if dupes_dropped:
+        notes.append(f"{dupes_dropped} exact-duplicate curve(s) dropped")
+    if isolated_dropped:
+        notes.append(f"{isolated_dropped} isolated shape(s) dropped as likely legend/marker artwork, not parcels")
+    note = f" ({'; '.join(notes)})" if notes else ""
+    print(f"Found {len(plots)} candidate plot(s){note}, all unlabeled - label, delete, or hand-draw missing ones from the frontend.")
     print(f"Wrote {plots_path}")
     print(f"Wrote {png_path}  ({image.width}x{image.height}px)")
     print(f"Wrote {rect_path}")
