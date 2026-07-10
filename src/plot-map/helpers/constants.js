@@ -1,10 +1,6 @@
 export const NS = 'http://www.w3.org/2000/svg';
 export const PAD = 30;
 
-// Khattalwada's hand-calibrated image rect (see villages.js) - it predates
-// the per-village "-rect.json" convention scripts/extract_plot_map.py writes.
-export const MAP_IMAGE_RECT = { x: 25.16, y: 171.72, width: 1597.36, height: 1997.3 };
-
 // Tailwind utility classes applied imperatively to SVG elements created outside React.
 // fill-transparent here is just a pre-mount fallback - every plot always gets
 // an inline fill from effectiveColor() in helpers/plotColor.js (translucent

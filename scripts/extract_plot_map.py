@@ -131,7 +131,13 @@ def extract_polygons(page, min_vertices, max_vertices, min_side, max_side):
             continue
         minx, miny, maxx, maxy = bbox_of(ring)
         w, h = maxx - minx, maxy - miny
-        if w < min_side or h < min_side or w > max_side or h > max_side:
+        # A "tiny speck" (stray dot/artifact, not a parcel) is small in both
+        # dimensions - checking each dimension independently (w < min_side or
+        # h < min_side) instead wrongly drops real long-and-narrow parcels
+        # (a roadside or canal-side sliver plot, common on these sheets),
+        # since only one of their two dimensions needs to dip below min_side
+        # for that check to reject them.
+        if max(w, h) < min_side or w > max_side or h > max_side:
             continue
         polygons.append(ring)
     return polygons
@@ -317,14 +323,18 @@ def main():
     }))
 
     pdf_doc = pdfium.PdfDocument(str(args.pdf))
-    bitmap = pdf_doc[args.page].render(scale=args.dpi / 72)
+    pdf_page = pdf_doc[args.page]
+    # Ask pdfium to rasterize only the content region (margins cut away
+    # before rendering, not after) rather than the whole physical sheet at
+    # full DPI - full-size A0/A1 sheets at 400dpi run well past Pillow's
+    # decompression-bomb pixel-count guard (which exists to catch malicious
+    # files, not legitimate oversized scans, but still raises either way).
+    # pdfium's crop is (left, bottom, right, top) cut from view, in PDF
+    # points, bottom-left/y-up - pdfplumber's bbox is top-left/y-down, so the
+    # top/bottom margins swap accordingly.
+    crop = (minx, pdf_page.get_size()[1] - maxy, pdf_page.get_size()[0] - maxx, miny)
+    bitmap = pdf_page.render(scale=args.dpi / 72, crop=crop)
     image = bitmap.to_pil()
-    scale = args.dpi / 72
-    crop_box = (
-        round(minx * scale), round(miny * scale),
-        round(maxx * scale), round(maxy * scale),
-    )
-    image = image.crop(crop_box)
     png_path = out_dir / f"{stem}-map.png"
     image.save(png_path)
 
