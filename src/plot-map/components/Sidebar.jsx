@@ -5,7 +5,7 @@ import GroupImportModal from './GroupImportModal';
 import { parsePlotNumbersFromFile } from '../helpers/parsePlotNumbers';
 import { Eyebrow, Select, Input } from '../../ui';
 
-export default function Sidebar({ engine, search, villages, villageKey, onVillageChange, loading }) {
+export default function Sidebar({ engine, search, towns, townKey, onTownChange, maps, mapKey, onMapChange, loading }) {
   const {
     plotCount, selectedPlot, renameLabel, deletePlot, setPlotColor, saveStatus, plotsRef,
     groupList, visibleGroups, importGroup, toggleGroup, removeGroup,
@@ -49,11 +49,19 @@ export default function Sidebar({ engine, search, villages, villageKey, onVillag
           {saveStatus === 'saving' && <span className="text-stamp"> · saving…</span>}
           {saveStatus === 'error' && <span className="text-stamp font-semibold"> · save failed, edit not written to disk</span>}
         </div>
-        {villages.length > 1 && (
+        {towns.length > 1 && (
           <Select
-            value={villageKey ?? ''}
-            onChange={(e) => onVillageChange(e.target.value)}
-            options={villages.map((v) => ({ value: v.key, label: v.label }))}
+            className={maps.length > 1 ? 'mb-2' : undefined}
+            value={townKey ?? ''}
+            onChange={(e) => onTownChange(e.target.value)}
+            options={towns.map((t) => ({ value: t.key, label: t.label }))}
+          />
+        )}
+        {maps.length > 1 && (
+          <Select
+            value={mapKey ?? ''}
+            onChange={(e) => onMapChange(e.target.value)}
+            options={maps.map((m) => ({ value: m.key, label: m.label }))}
           />
         )}
       </div>

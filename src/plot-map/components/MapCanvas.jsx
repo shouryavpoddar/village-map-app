@@ -1,17 +1,15 @@
 import { useEffect } from 'react';
 import { NS } from '../helpers/constants';
-import { effectiveColor } from '../helpers/plotColor';
 import CalibrationPanel from './CalibrationPanel';
-import Plot from './Plot';
+import PlotCanvasLayer from './PlotCanvasLayer';
 import { Button } from '../../ui';
 
 export default function MapCanvas({ engine, calibration, mapImageUrl, mapImageRect, villageLabel }) {
   const {
-    mapWrapRef, svgRef, viewportRef, polygonsRef, overlayRef, coordRef, viewRef,
+    mapWrapRef, svgRef, viewportRef, overlayRef, overlaySvgRef, canvasRef, coordRef, viewRef,
     fitAll, zoomAt, zoomButtonCenter,
     drawing, drawPoints, startDrawing, cancelDrawing, finishDrawing, undoDrawPoint,
     unlabeledCount, focusNextUnlabeled,
-    plots, selectedPlot, visibleGroups,
   } = engine;
   const { imageElRef, calibrating, setCalibrating, calibDisplay, resetCalib, copyCalib } = calibration;
 
@@ -35,7 +33,7 @@ export default function MapCanvas({ engine, calibration, mapImageUrl, mapImageRe
         <span className="text-[11px] tracking-[0.12em] uppercase text-ink-soft">Survey Plot Index</span>
       </div>
 
-      <svg ref={svgRef} id="pm-stage" xmlns={NS} className="w-full h-full block">
+      <svg ref={svgRef} id="pm-stage" xmlns={NS} className="absolute inset-0 w-full h-full block pointer-events-none">
         <g ref={viewportRef}>
           {mapImageUrl && (
             <image
@@ -47,17 +45,10 @@ export default function MapCanvas({ engine, calibration, mapImageUrl, mapImageRe
               height={mapImageRect.height}
             />
           )}
-          <g ref={polygonsRef}>
-            {plots.map((plot) => (
-              <Plot
-                key={plot.id}
-                plot={plot}
-                fill={effectiveColor(plot, visibleGroups)}
-                selected={plot.id === selectedPlot?.id}
-              />
-            ))}
-          </g>
         </g>
+      </svg>
+      <PlotCanvasLayer canvasRef={canvasRef} />
+      <svg ref={overlaySvgRef} id="pm-overlay-stage" xmlns={NS} className="absolute inset-0 w-full h-full block pointer-events-none">
         <g ref={overlayRef} />
       </svg>
 

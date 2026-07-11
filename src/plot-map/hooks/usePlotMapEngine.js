@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { NS, PAD, TICK_CLASSES, DRAW_LINE_CLASSES, DRAW_POINT_CLASSES } from '../helpers/constants';
 import { PALETTE, bboxOf, centroidOf, shoelaceArea } from '../helpers/geometry';
 import { summarizeGroups } from '../helpers/plotColor';
+import { usePlotCanvas } from './usePlotCanvas';
 
 // Owns the SVG viewport (pan/zoom/fly-to) and plot selection/editing. The
 // polygons themselves are rendered as React <Plot> components (see
@@ -23,8 +24,8 @@ import { summarizeGroups } from '../helpers/plotColor';
 export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) {
   const svgRef = useRef(null);
   const viewportRef = useRef(null);
-  const polygonsRef = useRef(null);
   const overlayRef = useRef(null);
+  const overlaySvgRef = useRef(null);
   const mapWrapRef = useRef(null);
   const coordRef = useRef(null);
 
@@ -45,6 +46,10 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
   const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'error'
   const [groupList, setGroupList] = useState([]); // [{ name, color, count }]
   const [visibleGroups, setVisibleGroups] = useState(new Set());
+
+  const { canvasRef, scheduleRedraw, refreshScreenCTM, hitTest, setHovered } = usePlotCanvas({
+    svgRef, mapWrapRef, viewRef, plotsRef, selectedIdRef, drawingRef, visibleGroupsRef,
+  });
 
   const refreshUnlabeledCount = useCallback(() => {
     setUnlabeledCount(plotsRef.current.filter((p) => !p.label).length);
@@ -149,7 +154,7 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
 
     if (!animate) {
       viewRef.current = { scale: s, tx: newTx, ty: newTy };
-      applyTransform(); updateOverlay();
+      applyTransform(); updateOverlay(); scheduleRedraw();
       return;
     }
     const start = { ...viewRef.current };
@@ -163,11 +168,11 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
         tx: start.tx + (newTx - start.tx) * p,
         ty: start.ty + (newTy - start.ty) * p,
       };
-      applyTransform(); updateOverlay();
+      applyTransform(); updateOverlay(); scheduleRedraw();
       if (p < 1) requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
-  }, [applyTransform, updateOverlay, viewRef]);
+  }, [applyTransform, updateOverlay, scheduleRedraw, viewRef]);
 
   const fitAll = useCallback((animate = true) => {
     const b = boundsRef.current;
@@ -190,27 +195,19 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     const newTx = vbPoint.x - newScale * localX;
     const newTy = vbPoint.y - newScale * localY;
     viewRef.current = { scale: newScale, tx: newTx, ty: newTy };
-    applyTransform(); updateOverlay();
-  }, [applyTransform, updateOverlay, viewRef]);
+    applyTransform(); updateOverlay(); scheduleRedraw();
+  }, [applyTransform, updateOverlay, scheduleRedraw, viewRef]);
 
+  // canvas draws the selected plot in its own pass on top of everything else
+  // (see usePlotCanvas), so there's no need to reorder the underlying array
+  // just to control paint order the way the old SVG-DOM renderer required
   const selectPlot = useCallback((plot, fly = true) => {
     selectedIdRef.current = plot.id;
     setSelectedPlot(plot);
-
-    // move it to the end of the render order so it paints last (on top),
-    // keeping its highlighted border from being covered by a neighbor
-    const idx = plotsRef.current.findIndex((p) => p.id === plot.id);
-    if (idx !== -1 && idx !== plotsRef.current.length - 1) {
-      const reordered = plotsRef.current.slice();
-      const [sel] = reordered.splice(idx, 1);
-      reordered.push(sel);
-      plotsRef.current = reordered;
-      setPlots(reordered);
-    }
-
     updateOverlay();
+    scheduleRedraw();
     if (fly) flyTo(plot.bbox.minX, plot.bbox.minY, plot.bbox.maxX, plot.bbox.maxY, true);
-  }, [updateOverlay, flyTo]);
+  }, [updateOverlay, scheduleRedraw, flyTo]);
 
   // jump to the nearest still-unlabeled plot (by centroid distance from the
   // currently selected one), or just the first one found if nothing's
@@ -249,6 +246,7 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
       setGroupList([]);
       visibleGroupsRef.current = new Set();
       setVisibleGroups(new Set());
+      scheduleRedraw();
       return;
     }
 
@@ -287,12 +285,19 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
 
     const svg = svgRef.current;
     const { VB_MINX, VB_MINY, VB_W, VB_H } = boundsRef.current;
-    svg.setAttribute('viewBox', `${VB_MINX} ${VB_MINY} ${VB_W} ${VB_H}`);
+    const viewBoxAttr = `${VB_MINX} ${VB_MINY} ${VB_W} ${VB_H}`;
+    svg.setAttribute('viewBox', viewBoxAttr);
     svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    if (overlaySvgRef.current) {
+      overlaySvgRef.current.setAttribute('viewBox', viewBoxAttr);
+      overlaySvgRef.current.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    }
+    refreshScreenCTM();
 
     setPlotCount(processed.length);
     setUnlabeledCount(processed.filter((p) => !p.label).length);
     fitAll(false);
+    scheduleRedraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawPlots]);
 
@@ -308,8 +313,9 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
       setSelectedPlot(next.find((p) => p.id === plotId) ?? null);
     }
     refreshUnlabeledCount();
+    scheduleRedraw();
     persist();
-  }, [persist, refreshUnlabeledCount]);
+  }, [persist, refreshUnlabeledCount, scheduleRedraw]);
 
   // hand-pick a plot's fill color, saved back to plotsPath as an explicit
   // `color` field (plots without one keep cycling through the default
@@ -321,8 +327,9 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     if (selectedIdRef.current === plotId) {
       setSelectedPlot(next.find((p) => p.id === plotId) ?? null);
     }
+    scheduleRedraw();
     persist();
-  }, [persist]);
+  }, [persist, scheduleRedraw]);
 
   // remove a plot - for shapes that turned out to be two parcels merged
   // into one closed path, stray non-parcel shapes that slipped through
@@ -339,8 +346,9 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     setPlotCount(next.length);
     refreshUnlabeledCount();
     refreshGroupList();
+    scheduleRedraw();
     persist();
-  }, [updateOverlay, persist, refreshUnlabeledCount, refreshGroupList]);
+  }, [updateOverlay, persist, refreshUnlabeledCount, refreshGroupList, scheduleRedraw]);
 
   // tag every plot whose label matches a number from an imported CSV/Excel
   // file with a named, colored group (see helpers/parsePlotNumbers.js) -
@@ -361,8 +369,9 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     if (selectedIdRef.current != null) {
       setSelectedPlot(next.find((p) => p.id === selectedIdRef.current) ?? null);
     }
+    scheduleRedraw();
     persist();
-  }, [refreshGroupList, persist]);
+  }, [refreshGroupList, persist, scheduleRedraw]);
 
   // show/hide a group's color overlay on the map without touching membership
   // - just flips which group names are considered "active", which the
@@ -372,7 +381,8 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     if (next.has(name)) next.delete(name); else next.add(name);
     visibleGroupsRef.current = next;
     setVisibleGroups(next);
-  }, []);
+    scheduleRedraw();
+  }, [scheduleRedraw]);
 
   // un-tag every plot in a group entirely (the group disappears once no
   // plot references it - there's nothing else to clean up)
@@ -392,8 +402,9 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     if (selectedIdRef.current != null) {
       setSelectedPlot(next.find((p) => p.id === selectedIdRef.current) ?? null);
     }
+    scheduleRedraw();
     persist();
-  }, [refreshGroupList, persist]);
+  }, [refreshGroupList, persist, scheduleRedraw]);
 
   // add a hand-drawn plot (see startDrawing/finishDrawing below), numbered
   // to continue on from the highest existing id
@@ -441,18 +452,19 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     setDrawing(true);
     selectedIdRef.current = null;
     setSelectedPlot(null);
-    if (polygonsRef.current) polygonsRef.current.style.pointerEvents = 'none';
+    setHovered(null);
     updateOverlay();
-  }, [updateOverlay]);
+    scheduleRedraw();
+  }, [updateOverlay, setHovered, scheduleRedraw]);
 
   const stopDrawing = useCallback(() => {
     drawingRef.current = false;
     drawPointsRef.current = [];
     setDrawPoints([]);
     setDrawing(false);
-    if (polygonsRef.current) polygonsRef.current.style.pointerEvents = '';
     updateOverlay();
-  }, [updateOverlay]);
+    scheduleRedraw();
+  }, [updateOverlay, scheduleRedraw]);
 
   const cancelDrawing = useCallback(() => {
     stopDrawing();
@@ -502,8 +514,10 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
       dragRef.current.lastClientY = e.clientY;
       // captured here (not read from the eventual 'click' event) because
       // setPointerCapture below can keep the browser's synthesized 'click'
-      // from ever reaching the polygon itself once the pointer is captured
-      dragRef.current.pressedPlotId = e.target.dataset?.id ?? null;
+      // from ever reaching the polygon itself once the pointer is captured.
+      // hitTest replaces the old e.target.dataset.id read now that plots
+      // are painted onto one canvas instead of being individual DOM nodes.
+      dragRef.current.pressedPlotId = hitTest(e.clientX, e.clientY)?.id ?? null;
       mapWrap.dataset.dragging = 'true';
       mapWrap.setPointerCapture(e.pointerId);
     };
@@ -511,6 +525,10 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
       const vb = svgPointFromEvent(e);
       if (coordRef.current) {
         coordRef.current.textContent = `x: ${vb.x.toFixed(1)}   y: ${vb.y.toFixed(1)}`;
+      }
+      if (!dragRef.current.dragging && !drawingRef.current && !calibration.calibratingRef.current) {
+        const hit = hitTest(e.clientX, e.clientY);
+        setHovered(hit?.id ?? null);
       }
       if (!dragRef.current.dragging) return;
       const { lastVB } = dragRef.current;
@@ -528,7 +546,7 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
         return;
       }
       viewRef.current = { ...viewRef.current, tx: viewRef.current.tx + dx, ty: viewRef.current.ty + dy };
-      applyTransform(); updateOverlay();
+      applyTransform(); updateOverlay(); scheduleRedraw();
     };
     const endDrag = () => {
       dragRef.current.dragging = false;
@@ -542,15 +560,19 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
       const { dragMoved, pressedPlotId } = dragRef.current;
       endDrag();
       if (drawingRef.current || calibration.calibratingRef.current || dragMoved || pressedPlotId == null) return;
-      const plot = plotsRef.current.find(p => String(p.id) === pressedPlotId);
+      const plot = plotsRef.current.find(p => p.id === pressedPlotId);
       if (plot) selectPlot(plot);
+    };
+    const onPointerLeave = () => {
+      endDrag();
+      setHovered(null);
     };
 
     mapWrap.addEventListener('wheel', onWheel, { passive: false });
     mapWrap.addEventListener('pointerdown', onPointerDown);
     mapWrap.addEventListener('pointermove', onPointerMove);
     mapWrap.addEventListener('pointerup', onPointerUp);
-    mapWrap.addEventListener('pointerleave', endDrag);
+    mapWrap.addEventListener('pointerleave', onPointerLeave);
     mapWrap.addEventListener('pointercancel', endDrag);
 
     return () => {
@@ -558,11 +580,12 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
       mapWrap.removeEventListener('pointerdown', onPointerDown);
       mapWrap.removeEventListener('pointermove', onPointerMove);
       mapWrap.removeEventListener('pointerup', onPointerUp);
-      mapWrap.removeEventListener('pointerleave', endDrag);
+      mapWrap.removeEventListener('pointerleave', onPointerLeave);
       mapWrap.removeEventListener('pointercancel', endDrag);
     };
   }, [
-    svgPointFromEvent, zoomAt, applyTransform, updateOverlay, viewRef, selectPlot,
+    svgPointFromEvent, zoomAt, applyTransform, updateOverlay, scheduleRedraw, viewRef, selectPlot,
+    hitTest, setHovered,
     calibration.handleCalibWheel, calibration.handleCalibDrag, calibration.commitCalibDrag,
   ]);
 
@@ -572,8 +595,8 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
   }), []);
 
   return {
-    svgRef, viewportRef, polygonsRef, overlayRef, mapWrapRef, coordRef,
-    plotsRef, viewRef, plots,
+    svgRef, viewportRef, overlayRef, overlaySvgRef, canvasRef, mapWrapRef, coordRef,
+    plotsRef, viewRef, plots, selectedIdRef,
     selectedPlot, plotCount, unlabeledCount, saveStatus,
     fitAll, zoomAt, zoomButtonCenter, selectPlot, renameLabel, deletePlot, setPlotColor,
     focusNextUnlabeled,
