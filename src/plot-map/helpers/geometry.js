@@ -24,3 +24,15 @@ export function bboxOf(pts) {
   }
   return { minX, minY, maxX, maxY };
 }
+
+// Even-odd ray casting - used for canvas hit-testing, where (unlike SVG)
+// there's no native per-shape point containment the browser gives us for free
+export function pointInPolygon(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i];
+    const [xj, yj] = pts[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
