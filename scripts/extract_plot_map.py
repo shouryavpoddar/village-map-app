@@ -244,21 +244,21 @@ def main():
     ap.add_argument("--page", type=int, default=0, help="0-indexed page number (default: 0)")
     ap.add_argument("--dpi", type=int, default=400, help="render resolution for the background PNG (default: 400)")
     ap.add_argument("--out-dir", type=Path, default=None,
-                     help="output directory (default: src/assets/villages/<pdf-stem>/)")
+                    help="output directory (default: src/assets/villages/<pdf-stem>/)")
     ap.add_argument("--min-vertices", type=int, default=4, help="minimum polygon vertex count (default: 4)")
     ap.add_argument("--max-vertices", type=int, default=60, help="maximum polygon vertex count (default: 60)")
     ap.add_argument("--min-side", type=float, default=2.0, help="minimum bbox side in PDF points, filters out tiny specks (default: 2.0)")
     ap.add_argument("--max-side", type=float, default=200.0, help="maximum bbox side in PDF points, filters out large non-parcel shapes (default: 200.0)")
     ap.add_argument("--min-neighbors", type=int, default=3,
-                     help="drop candidates with fewer than this many other candidates touching their bounding box "
-                          "(within --neighbor-margin) - filters out legend/title-block artwork and scattered point "
-                          "markers, which sit alone, since real parcels tile the map edge-to-edge. Set to 0 to disable (default: 3)")
+                    help="drop candidates with fewer than this many other candidates touching their bounding box "
+                         "(within --neighbor-margin) - filters out legend/title-block artwork and scattered point "
+                         "markers, which sit alone, since real parcels tile the map edge-to-edge. Set to 0 to disable (default: 3)")
     ap.add_argument("--neighbor-margin", type=float, default=3.0,
-                     help="PDF-point margin used to decide whether two candidates' bounding boxes touch, for --min-neighbors (default: 3.0)")
+                    help="PDF-point margin used to decide whether two candidates' bounding boxes touch, for --min-neighbors (default: 3.0)")
     ap.add_argument("--max-shape-repeats", type=int, default=4,
-                     help="drop candidates whose exact shape (position-independent) recurs more than this many times "
-                          "elsewhere on the page - filters out symbols (trees, buildings, wells, ...) stamped as "
-                          "repeated copies of the same template. Set to 0 to disable (default: 4)")
+                    help="drop candidates whose exact shape (position-independent) recurs more than this many times "
+                         "elsewhere on the page - filters out symbols (trees, buildings, wells, ...) stamped as "
+                         "repeated copies of the same template. Set to 0 to disable (default: 4)")
     args = ap.parse_args()
 
     if not args.pdf.exists():
