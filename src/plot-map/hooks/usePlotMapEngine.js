@@ -36,6 +36,11 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
   const drawingRef = useRef(false);
   const drawPointsRef = useRef([]);
   const visibleGroupsRef = useRef(new Set());
+  // groups created via createGroup before any plot has been tagged into them
+  // yet - summarizeGroups only sees groups that appear on a plot, so these
+  // are tracked separately just so they still show up (with a 0 count) in
+  // groupList until addPlotToGroup gives them their first member
+  const manualGroupsRef = useRef([]);
 
   const [plots, setPlots] = useState([]);
   const [selectedPlot, setSelectedPlot] = useState(null);
@@ -84,7 +89,12 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
   }, [plotsPath]);
 
   const refreshGroupList = useCallback(() => {
-    setGroupList(summarizeGroups(plotsRef.current));
+    const derived = summarizeGroups(plotsRef.current);
+    const derivedNames = new Set(derived.map((g) => g.name));
+    const empties = manualGroupsRef.current
+      .filter((g) => !derivedNames.has(g.name))
+      .map((g) => ({ ...g, count: 0 }));
+    setGroupList([...derived, ...empties]);
   }, []);
 
   const applyTransform = useCallback(() => {
@@ -238,6 +248,8 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     setSelectedPlot(null);
     if (!rawPlots || !svgRef.current) return;
 
+    manualGroupsRef.current = [];
+
     if (!rawPlots.length) {
       plotsRef.current = [];
       setPlots([]);
@@ -373,6 +385,63 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     persist();
   }, [refreshGroupList, persist, scheduleRedraw]);
 
+  // start a named, colored group with no plots yet - tracked in
+  // manualGroupsRef so it shows up (0 count) in groupList until
+  // addPlotToGroup gives it a first member, at which point summarizeGroups
+  // picks it up on its own and refreshGroupList stops adding it separately
+  const createGroup = useCallback((name, color) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const taken = summarizeGroups(plotsRef.current).some((g) => g.name === trimmed)
+      || manualGroupsRef.current.some((g) => g.name === trimmed);
+    if (taken) return;
+    manualGroupsRef.current = [...manualGroupsRef.current, { name: trimmed, color }];
+    visibleGroupsRef.current = new Set(visibleGroupsRef.current).add(trimmed);
+    setVisibleGroups(new Set(visibleGroupsRef.current));
+    refreshGroupList();
+  }, [refreshGroupList]);
+
+  // tag a single existing plot into a group (created via createGroup or
+  // already populated via importGroup) - the group's own color wins, same as
+  // importGroup, so every member stays visually consistent
+  const addPlotToGroup = useCallback((plotId, groupName) => {
+    const group = summarizeGroups(plotsRef.current).find((g) => g.name === groupName)
+      ?? manualGroupsRef.current.find((g) => g.name === groupName);
+    if (!group) return;
+    const next = plotsRef.current.map((p) => {
+      if (p.id !== plotId || p.groups?.some((g) => g.name === groupName)) return p;
+      return { ...p, groups: [...(p.groups ?? []), { name: groupName, color: group.color }] };
+    });
+    plotsRef.current = next;
+    setPlots(next);
+    refreshGroupList();
+    if (selectedIdRef.current === plotId) {
+      setSelectedPlot(next.find((p) => p.id === plotId) ?? null);
+    }
+    scheduleRedraw();
+    persist();
+  }, [refreshGroupList, persist, scheduleRedraw]);
+
+  // undo a single plot's membership in one group, leaving the group (and its
+  // other members) otherwise intact - the group only disappears once every
+  // plot has been removed from it (see removeGroup) or manualGroupsRef no
+  // longer remembers it as a placeholder
+  const removePlotFromGroup = useCallback((plotId, groupName) => {
+    const next = plotsRef.current.map((p) => {
+      if (p.id !== plotId || !p.groups?.some((g) => g.name === groupName)) return p;
+      const remaining = p.groups.filter((g) => g.name !== groupName);
+      return { ...p, groups: remaining.length ? remaining : undefined };
+    });
+    plotsRef.current = next;
+    setPlots(next);
+    refreshGroupList();
+    if (selectedIdRef.current === plotId) {
+      setSelectedPlot(next.find((p) => p.id === plotId) ?? null);
+    }
+    scheduleRedraw();
+    persist();
+  }, [refreshGroupList, persist, scheduleRedraw]);
+
   // show/hide a group's color overlay on the map without touching membership
   // - just flips which group names are considered "active", which the
   // <Plot> list re-derives its fill from on the next render
@@ -394,6 +463,7 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     });
     plotsRef.current = next;
     setPlots(next);
+    manualGroupsRef.current = manualGroupsRef.current.filter((g) => g.name !== name);
     const nextVisible = new Set(visibleGroupsRef.current);
     nextVisible.delete(name);
     visibleGroupsRef.current = nextVisible;
@@ -602,5 +672,6 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     focusNextUnlabeled,
     drawing, drawPoints, startDrawing, cancelDrawing, finishDrawing, undoDrawPoint,
     groupList, visibleGroups, importGroup, toggleGroup, removeGroup,
+    createGroup, addPlotToGroup, removePlotFromGroup,
   };
 }

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import PlotDetailCard from './PlotDetailCard';
 import GroupsPanel from './GroupsPanel';
 import GroupImportModal from './GroupImportModal';
+import NewGroupModal from './NewGroupModal';
 import { parsePlotNumbersFromFile } from '../helpers/parsePlotNumbers';
 import { Eyebrow, Select, Input } from '../../ui';
 
@@ -9,11 +10,13 @@ export default function Sidebar({ engine, search, towns, townKey, onTownChange, 
   const {
     plotCount, selectedPlot, renameLabel, deletePlot, setPlotColor, saveStatus, plotsRef,
     groupList, visibleGroups, importGroup, toggleGroup, removeGroup,
+    createGroup, addPlotToGroup, removePlotFromGroup,
   } = engine;
   const { query, setQuery, matches, handleSearchKeyDown, handlePickMatch } = search;
 
   const [pendingImport, setPendingImport] = useState(null); // { fileName, matchedIds, matchedCount, totalCount }
   const [importError, setImportError] = useState('');
+  const [creatingGroup, setCreatingGroup] = useState(false);
 
   const handleImportFile = async (file) => {
     setImportError('');
@@ -37,6 +40,11 @@ export default function Sidebar({ engine, search, towns, townKey, onTownChange, 
   const handleConfirmImport = (name, color) => {
     importGroup(name, color, pendingImport.matchedIds);
     setPendingImport(null);
+  };
+
+  const handleConfirmNewGroup = (name, color) => {
+    createGroup(name, color);
+    setCreatingGroup(false);
   };
 
   return (
@@ -72,6 +80,7 @@ export default function Sidebar({ engine, search, towns, townKey, onTownChange, 
         onToggleGroup={toggleGroup}
         onRemoveGroup={removeGroup}
         onImportFile={handleImportFile}
+        onNewGroup={() => setCreatingGroup(true)}
       />
       {importError && <p className="px-5 py-2 text-[11px] text-stamp border-b border-line-faint">{importError}</p>}
 
@@ -101,7 +110,15 @@ export default function Sidebar({ engine, search, towns, townKey, onTownChange, 
 
       <div className="flex-1 overflow-y-auto px-5 py-[18px]">
         {selectedPlot ? (
-          <PlotDetailCard plot={selectedPlot} onRename={renameLabel} onDelete={deletePlot} onColorChange={setPlotColor} />
+          <PlotDetailCard
+            plot={selectedPlot}
+            groupList={groupList}
+            onRename={renameLabel}
+            onDelete={deletePlot}
+            onColorChange={setPlotColor}
+            onAddToGroup={(groupName) => addPlotToGroup(selectedPlot.id, groupName)}
+            onRemoveFromGroup={(groupName) => removePlotFromGroup(selectedPlot.id, groupName)}
+          />
         ) : (
           <div className="text-[12.5px] leading-[1.9] text-ink-soft">
             <p><span className="inline-block font-mono bg-paper-raised border border-line px-[6px] mr-1 text-[11px]">drag</span> to pan the sheet</p>
@@ -122,6 +139,13 @@ export default function Sidebar({ engine, search, towns, townKey, onTownChange, 
           totalCount={pendingImport.totalCount}
           onConfirm={handleConfirmImport}
           onCancel={() => setPendingImport(null)}
+        />
+      )}
+
+      {creatingGroup && (
+        <NewGroupModal
+          onConfirm={handleConfirmNewGroup}
+          onCancel={() => setCreatingGroup(false)}
         />
       )}
     </div>

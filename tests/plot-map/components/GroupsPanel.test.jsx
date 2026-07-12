@@ -64,4 +64,36 @@ describe('GroupsPanel', () => {
 
     expect(onImportFile).toHaveBeenCalledWith(file);
   });
+
+  it('shows a 0 count for a manually created group with no plots yet', () => {
+    render(
+      <GroupsPanel
+        groupList={[{ name: 'New Zone', color: '#4a90d9', count: 0 }]}
+        visibleGroups={new Set(['New Zone'])}
+        onToggleGroup={vi.fn()}
+        onRemoveGroup={vi.fn()}
+        onImportFile={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('New Zone')).toBeInTheDocument();
+    expect(screen.getByText('0')).toBeInTheDocument();
+  });
+
+  it('calls onNewGroup when "New group" is clicked', async () => {
+    const onNewGroup = vi.fn();
+    render(
+      <GroupsPanel
+        groupList={[]}
+        visibleGroups={new Set()}
+        onToggleGroup={vi.fn()}
+        onRemoveGroup={vi.fn()}
+        onImportFile={vi.fn()}
+        onNewGroup={onNewGroup}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'New group' }));
+    expect(onNewGroup).toHaveBeenCalledTimes(1);
+  });
 });
