@@ -1,15 +1,18 @@
-import { Eyebrow, Muted, FileButton, Switch, IconButton } from '../../ui';
+import { Eyebrow, Muted, FileButton, Button, Switch, IconButton } from '../../ui';
 
-export default function GroupsPanel({ groupList, visibleGroups, onToggleGroup, onRemoveGroup, onImportFile }) {
+export default function GroupsPanel({ groupList, visibleGroups, onToggleGroup, onRemoveGroup, onImportFile, onNewGroup }) {
   return (
     <div className="px-5 py-4 border-b border-line-faint">
       <div className="flex items-center justify-between mb-2">
         <Eyebrow>Groups</Eyebrow>
-        <FileButton accept=".csv,.xlsx,.xls" onFileSelect={onImportFile}>Import file</FileButton>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={onNewGroup}>New group</Button>
+          <FileButton size="sm" accept=".csv,.xlsx,.xls" onFileSelect={onImportFile}>Import file</FileButton>
+        </div>
       </div>
       {groupList.length === 0 ? (
         <Muted className="m-0">
-          Import a CSV or Excel file of plot numbers to tag and highlight them as a group.
+          Import a CSV or Excel file of plot numbers, or start a new group and add plots to it by hand.
         </Muted>
       ) : (
         <ul className="list-none m-0 p-0 flex flex-col gap-[6px]">

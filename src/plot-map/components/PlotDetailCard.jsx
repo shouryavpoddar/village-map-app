@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Card, DetailRow, Badge, ColorSwatch, Button } from '../../ui';
+import { Card, DetailRow, Badge, ColorSwatch, Button, Select } from '../../ui';
 
-export default function PlotDetailCard({ plot, onRename, onDelete, onColorChange }) {
+export default function PlotDetailCard({ plot, groupList, onRename, onDelete, onColorChange, onAddToGroup, onRemoveFromGroup }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(plot.label);
+
+  const memberNames = new Set((plot.groups ?? []).map((g) => g.name));
+  const joinableGroups = (groupList ?? []).filter((g) => !memberNames.has(g.name));
 
   useEffect(() => {
     setDraft(plot.label);
@@ -52,18 +55,41 @@ export default function PlotDetailCard({ plot, onRename, onDelete, onColorChange
       <DetailRow label="Vertices" value={plot.points.length} />
       <DetailRow label="Centroid" value={`${plot.centroid[0].toFixed(1)}, ${plot.centroid[1].toFixed(1)}`} />
       <DetailRow label="Bounding box" value={`${(plot.bbox.maxX - plot.bbox.minX).toFixed(0)} × ${(plot.bbox.maxY - plot.bbox.minY).toFixed(0)}`} />
-      <DetailRow label="Color" divider={plot.groups?.length > 0}>
+      <DetailRow label="Color" divider={plot.groups?.length > 0 || joinableGroups.length > 0}>
         <label className="flex items-center gap-2 cursor-pointer">
           <span className="text-ink font-medium">{plot.color}</span>
           <ColorSwatch size="sm" value={plot.color} onChange={(e) => onColorChange(plot.id, e.target.value)} />
         </label>
       </DetailRow>
       {plot.groups?.length > 0 && (
-        <DetailRow label="Groups" divider={false} align="start">
+        <DetailRow label="Groups" divider={joinableGroups.length > 0} align="start">
           <div className="flex flex-wrap gap-[6px] justify-end max-w-[200px]">
             {plot.groups.map((g) => (
-              <Badge key={g.name} variant="tag" dotColor={g.color}>{g.name}</Badge>
+              <Badge key={g.name} variant="tag" dotColor={g.color}>
+                {g.name}
+                <button
+                  type="button"
+                  title={`Remove from "${g.name}"`}
+                  className="ml-0.5 text-ink-soft hover:text-stamp"
+                  onClick={() => onRemoveFromGroup(g.name)}
+                >
+                  ×
+                </button>
+              </Badge>
             ))}
+          </div>
+        </DetailRow>
+      )}
+      {joinableGroups.length > 0 && (
+        <DetailRow label="Add to group" divider={false}>
+          <div className="w-[140px]">
+            <Select
+              value=""
+              onChange={(e) => {
+                if (e.target.value) onAddToGroup(e.target.value);
+              }}
+              options={[{ value: '', label: 'Choose…' }, ...joinableGroups.map((g) => ({ value: g.name, label: g.name }))]}
+            />
           </div>
         </DetailRow>
       )}

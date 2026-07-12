@@ -157,3 +157,88 @@ describe('usePlotMapEngine label editing', () => {
     expect(fetch).toHaveBeenCalledWith('/api/save-plots', expect.objectContaining({ method: 'POST' }));
   });
 });
+
+describe('usePlotMapEngine manual group creation', () => {
+  it('createGroup adds a 0-count group to groupList without touching any plot', () => {
+    const { engineHolder } = setup();
+
+    act(() => engineHolder.current.createGroup('Irrigated Zone', '#4a90d9'));
+
+    expect(engineHolder.current.groupList).toEqual([{ name: 'Irrigated Zone', color: '#4a90d9', count: 0 }]);
+    expect(engineHolder.current.visibleGroups.has('Irrigated Zone')).toBe(true);
+    expect(engineHolder.current.plotsRef.current.every((p) => !p.groups?.length)).toBe(true);
+    expect(fetch).not.toHaveBeenCalled(); // nothing to save - no plot references the group yet
+  });
+
+  it('does not create a second group under a name that already exists', () => {
+    const { engineHolder } = setup();
+
+    act(() => engineHolder.current.createGroup('Irrigated Zone', '#4a90d9'));
+    act(() => engineHolder.current.createGroup('Irrigated Zone', '#a6402c'));
+
+    expect(engineHolder.current.groupList).toHaveLength(1);
+    expect(engineHolder.current.groupList[0].color).toBe('#4a90d9');
+  });
+
+  it('ignores a blank/whitespace-only name', () => {
+    const { engineHolder } = setup();
+
+    act(() => engineHolder.current.createGroup('   ', '#4a90d9'));
+
+    expect(engineHolder.current.groupList).toEqual([]);
+  });
+
+  it('addPlotToGroup tags the plot with the group\'s color, bumps the count, and persists', async () => {
+    const { engineHolder } = setup();
+    act(() => engineHolder.current.createGroup('Irrigated Zone', '#4a90d9'));
+
+    await act(async () => engineHolder.current.addPlotToGroup(1, 'Irrigated Zone'));
+
+    expect(engineHolder.current.plotsRef.current.find((p) => p.id === 1).groups).toEqual([
+      { name: 'Irrigated Zone', color: '#4a90d9' },
+    ]);
+    expect(engineHolder.current.groupList).toEqual([{ name: 'Irrigated Zone', color: '#4a90d9', count: 1 }]);
+    expect(fetch).toHaveBeenCalledWith('/api/save-plots', expect.objectContaining({ method: 'POST' }));
+  });
+
+  it('addPlotToGroup is a no-op for a group name that does not exist', () => {
+    const { engineHolder } = setup();
+
+    act(() => engineHolder.current.addPlotToGroup(1, 'No Such Group'));
+
+    expect(engineHolder.current.plotsRef.current.find((p) => p.id === 1).groups).toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('addPlotToGroup does not duplicate an existing membership', async () => {
+    const { engineHolder } = setup();
+    act(() => engineHolder.current.createGroup('Irrigated Zone', '#4a90d9'));
+    await act(async () => engineHolder.current.addPlotToGroup(1, 'Irrigated Zone'));
+
+    await act(async () => engineHolder.current.addPlotToGroup(1, 'Irrigated Zone'));
+
+    expect(engineHolder.current.plotsRef.current.find((p) => p.id === 1).groups).toHaveLength(1);
+    expect(engineHolder.current.groupList[0].count).toBe(1);
+  });
+
+  it('removePlotFromGroup untags just that plot, leaving the group as an empty placeholder', async () => {
+    const { engineHolder } = setup();
+    act(() => engineHolder.current.createGroup('Irrigated Zone', '#4a90d9'));
+    await act(async () => engineHolder.current.addPlotToGroup(1, 'Irrigated Zone'));
+
+    await act(async () => engineHolder.current.removePlotFromGroup(1, 'Irrigated Zone'));
+
+    expect(engineHolder.current.plotsRef.current.find((p) => p.id === 1).groups).toBeUndefined();
+    expect(engineHolder.current.groupList).toEqual([{ name: 'Irrigated Zone', color: '#4a90d9', count: 0 }]);
+  });
+
+  it('removeGroup clears the manual placeholder too, so a fully-deleted group does not reappear as empty', async () => {
+    const { engineHolder } = setup();
+    act(() => engineHolder.current.createGroup('Irrigated Zone', '#4a90d9'));
+    await act(async () => engineHolder.current.addPlotToGroup(1, 'Irrigated Zone'));
+
+    await act(async () => engineHolder.current.removeGroup('Irrigated Zone'));
+
+    expect(engineHolder.current.groupList).toEqual([]);
+  });
+});

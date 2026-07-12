@@ -85,4 +85,80 @@ describe('PlotDetailCard', () => {
       expect(onDelete).not.toHaveBeenCalled();
     });
   });
+
+  describe('group membership', () => {
+    const groupList = [
+      { name: 'Irrigated Zone', color: '#4a90d9', count: 1 },
+      { name: 'Dry Zone', color: '#a6402c', count: 0 },
+    ];
+
+    it('only offers groups the plot is not already a member of', () => {
+      render(
+        <PlotDetailCard
+          plot={plot}
+          groupList={groupList}
+          onRename={vi.fn()}
+          onDelete={vi.fn()}
+          onColorChange={vi.fn()}
+          onAddToGroup={vi.fn()}
+          onRemoveFromGroup={vi.fn()}
+        />,
+      );
+
+      const options = screen.getByRole('combobox').querySelectorAll('option');
+      expect(Array.from(options).map((o) => o.textContent)).toEqual(['Choose…', 'Dry Zone']);
+    });
+
+    it('calls onAddToGroup when a group is picked from the dropdown', async () => {
+      const onAddToGroup = vi.fn();
+      render(
+        <PlotDetailCard
+          plot={plot}
+          groupList={groupList}
+          onRename={vi.fn()}
+          onDelete={vi.fn()}
+          onColorChange={vi.fn()}
+          onAddToGroup={onAddToGroup}
+          onRemoveFromGroup={vi.fn()}
+        />,
+      );
+
+      await userEvent.selectOptions(screen.getByRole('combobox'), 'Dry Zone');
+      expect(onAddToGroup).toHaveBeenCalledWith('Dry Zone');
+    });
+
+    it('does not show the "Add to group" picker once the plot belongs to every group', () => {
+      render(
+        <PlotDetailCard
+          plot={plot}
+          groupList={[{ name: 'Irrigated Zone', color: '#4a90d9', count: 1 }]}
+          onRename={vi.fn()}
+          onDelete={vi.fn()}
+          onColorChange={vi.fn()}
+          onAddToGroup={vi.fn()}
+          onRemoveFromGroup={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByText('Add to group')).not.toBeInTheDocument();
+    });
+
+    it('calls onRemoveFromGroup when a group badge\'s "x" is clicked', async () => {
+      const onRemoveFromGroup = vi.fn();
+      render(
+        <PlotDetailCard
+          plot={plot}
+          groupList={groupList}
+          onRename={vi.fn()}
+          onDelete={vi.fn()}
+          onColorChange={vi.fn()}
+          onAddToGroup={vi.fn()}
+          onRemoveFromGroup={onRemoveFromGroup}
+        />,
+      );
+
+      await userEvent.click(screen.getByTitle('Remove from "Irrigated Zone"'));
+      expect(onRemoveFromGroup).toHaveBeenCalledWith('Irrigated Zone');
+    });
+  });
 });
