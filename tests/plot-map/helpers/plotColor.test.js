@@ -52,6 +52,49 @@ describe('effectiveColor', () => {
     };
     expect(effectiveColor(plot, new Set(['River']))).toBe(withOpacity('#0000ff', 0.4));
   });
+
+  it('mixes yellow and blue into green, like paint rather than straight RGB averaging', () => {
+    const plot = {
+      ...basePlot,
+      groups: [{ name: 'Yellow Zone', color: '#ffff00' }, { name: 'Blue Zone', color: '#0000ff' }],
+    };
+    // plain RGB averaging would give gray (128,128,128) since yellow/blue sit
+    // opposite each other on the RGB hue wheel - the artist's RYB wheel puts
+    // them 120 degrees apart instead, with green exactly at their midpoint
+    expect(effectiveColor(plot, new Set(['Yellow Zone', 'Blue Zone']))).toBe('rgba(0, 255, 0, 0.4)');
+  });
+
+  it('mixes red and yellow into orange', () => {
+    const plot = {
+      ...basePlot,
+      groups: [{ name: 'Red Zone', color: '#ff0000' }, { name: 'Yellow Zone', color: '#ffff00' }],
+    };
+    expect(effectiveColor(plot, new Set(['Red Zone', 'Yellow Zone']))).toBe('rgba(255, 128, 0, 0.4)');
+  });
+
+  it('blends three overlapping groups at once', () => {
+    const plot = {
+      ...basePlot,
+      groups: [
+        { name: 'Red Zone', color: '#ff0000' },
+        { name: 'Yellow Zone', color: '#ffff00' },
+        { name: 'Blue Zone', color: '#0000ff' },
+      ],
+    };
+    const result = effectiveColor(plot, new Set(['Red Zone', 'Yellow Zone', 'Blue Zone']));
+    expect(result).toMatch(/^rgba\(\d+, \d+, \d+, 0\.4\)$/);
+    expect(result).not.toBe(withOpacity('#ff0000', 0.4));
+    expect(result).not.toBe(withOpacity('#ffff00', 0.4));
+    expect(result).not.toBe(withOpacity('#0000ff', 0.4));
+  });
+
+  it('drops a group from the blend once it is toggled off, even if the plot still belongs to it', () => {
+    const plot = {
+      ...basePlot,
+      groups: [{ name: 'Yellow Zone', color: '#ffff00' }, { name: 'Blue Zone', color: '#0000ff' }],
+    };
+    expect(effectiveColor(plot, new Set(['Yellow Zone']))).toBe(withOpacity('#ffff00', 0.4));
+  });
 });
 
 describe('summarizeGroups', () => {
