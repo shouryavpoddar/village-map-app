@@ -1,10 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, act, fireEvent } from '@testing-library/react';
 import { usePlotMapEngine } from '../../../src/plot-map/hooks/usePlotMapEngine';
+import { upsertPlot, deletePlotDoc, upsertPlotsBatch } from '../../../src/lib/plotsRepo';
 import {
   installDOMMatrixPolyfill, installCanvasContextMock, installResizeObserverMock,
   installControllableRAF, installSvgGeometryMock, installPointerCaptureStub, mockBoundingClientRect,
 } from '../testUtils/domMocks';
+
+vi.mock('../../../src/lib/plotsRepo', () => ({
+  loadMapPlots: vi.fn(() => Promise.resolve([])),
+  upsertPlot: vi.fn(() => Promise.resolve()),
+  deletePlotDoc: vi.fn(() => Promise.resolve()),
+  upsertPlotsBatch: vi.fn(() => Promise.resolve()),
+}));
 
 const RAW_PLOTS = [
   { id: 1, label: 'Plot A', points: [[0, 0], [10, 0], [10, 10], [0, 10]] },
@@ -17,8 +25,8 @@ const RAW_PLOTS = [
 // canvas, overlay svg, all inside the pointer-handling wrapper div). This
 // harness reproduces that same structure so the engine's effects (which read
 // svgRef.current.getScreenCTM() etc on mount) have real elements to attach to.
-function Harness({ rawPlots, viewRef, calibration, plotsPath, onEngine }) {
-  const engine = usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath });
+function Harness({ rawPlots, viewRef, calibration, mapId, onEngine }) {
+  const engine = usePlotMapEngine({ rawPlots, viewRef, calibration, mapId });
   onEngine(engine);
   return (
     <div ref={engine.mapWrapRef}>
@@ -29,14 +37,14 @@ function Harness({ rawPlots, viewRef, calibration, plotsPath, onEngine }) {
   );
 }
 
-function setup({ rawPlots = RAW_PLOTS, plotsPath = 'village-plots.json' } = {}) {
+function setup({ rawPlots = RAW_PLOTS, mapId = 'village-plots' } = {}) {
   installDOMMatrixPolyfill();
   installSvgGeometryMock(); // identity getScreenCTM by default - see below for why that matters
   installCanvasContextMock();
   installResizeObserverMock();
   installPointerCaptureStub();
   const raf = installControllableRAF();
-  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true })));
+  vi.clearAllMocks();
 
   const viewRef = { current: { scale: 1, tx: 0, ty: 0 } };
   const calibration = {
@@ -56,7 +64,7 @@ function setup({ rawPlots = RAW_PLOTS, plotsPath = 'village-plots.json' } = {}) 
         rawPlots={rawPlots}
         viewRef={viewRef}
         calibration={calibration}
-        plotsPath={plotsPath}
+        mapId={mapId}
         onEngine={(e) => { engineHolder.current = e; }}
       />
     );
@@ -146,7 +154,7 @@ describe('usePlotMapEngine pointer-driven selection', () => {
 });
 
 describe('usePlotMapEngine label editing', () => {
-  it('renameLabel updates the label, recomputes unlabeledCount, and persists to the save endpoint', async () => {
+  it('renameLabel updates the label, recomputes unlabeledCount, and persists just that plot to Firestore', async () => {
     const { engineHolder } = setup();
     expect(engineHolder.current.unlabeledCount).toBe(1);
 
@@ -154,7 +162,7 @@ describe('usePlotMapEngine label editing', () => {
 
     expect(engineHolder.current.unlabeledCount).toBe(0);
     expect(engineHolder.current.plotsRef.current.find((p) => p.id === 3).label).toBe('Plot C');
-    expect(fetch).toHaveBeenCalledWith('/api/save-plots', expect.objectContaining({ method: 'POST' }));
+    expect(upsertPlot).toHaveBeenCalledWith('village-plots', expect.objectContaining({ id: 3, label: 'Plot C' }));
   });
 });
 
@@ -167,7 +175,9 @@ describe('usePlotMapEngine manual group creation', () => {
     expect(engineHolder.current.groupList).toEqual([{ name: 'Irrigated Zone', color: '#4a90d9', count: 0 }]);
     expect(engineHolder.current.visibleGroups.has('Irrigated Zone')).toBe(true);
     expect(engineHolder.current.plotsRef.current.every((p) => !p.groups?.length)).toBe(true);
-    expect(fetch).not.toHaveBeenCalled(); // nothing to save - no plot references the group yet
+    // nothing to save - no plot references the group yet
+    expect(upsertPlot).not.toHaveBeenCalled();
+    expect(upsertPlotsBatch).not.toHaveBeenCalled();
   });
 
   it('does not create a second group under a name that already exists', () => {
@@ -198,7 +208,9 @@ describe('usePlotMapEngine manual group creation', () => {
       { name: 'Irrigated Zone', color: '#4a90d9' },
     ]);
     expect(engineHolder.current.groupList).toEqual([{ name: 'Irrigated Zone', color: '#4a90d9', count: 1 }]);
-    expect(fetch).toHaveBeenCalledWith('/api/save-plots', expect.objectContaining({ method: 'POST' }));
+    expect(upsertPlot).toHaveBeenCalledWith('village-plots', expect.objectContaining({
+      id: 1, groups: [{ name: 'Irrigated Zone', color: '#4a90d9' }],
+    }));
   });
 
   it('addPlotToGroup is a no-op for a group name that does not exist', () => {
@@ -207,7 +219,7 @@ describe('usePlotMapEngine manual group creation', () => {
     act(() => engineHolder.current.addPlotToGroup(1, 'No Such Group'));
 
     expect(engineHolder.current.plotsRef.current.find((p) => p.id === 1).groups).toBeUndefined();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(upsertPlot).not.toHaveBeenCalled();
   });
 
   it('addPlotToGroup does not duplicate an existing membership', async () => {

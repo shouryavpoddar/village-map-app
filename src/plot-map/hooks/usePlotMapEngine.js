@@ -3,6 +3,18 @@ import { NS, PAD, TICK_CLASSES, DRAW_LINE_CLASSES, DRAW_POINT_CLASSES } from '..
 import { PALETTE, bboxOf, centroidOf, shoelaceArea } from '../helpers/geometry';
 import { summarizeGroups } from '../helpers/plotColor';
 import { usePlotCanvas } from './usePlotCanvas';
+import { deletePlotDoc, upsertPlot, upsertPlotsBatch } from '../../lib/plotsRepo';
+
+// Strips a processed plot (with derived fields like area/centroid/bbox) back
+// to the on-disk/Firestore shape - {color}/{groups} are only included when
+// actually set, so plots without an override don't carry dead fields.
+function toPlotDoc({ id, label, points, color, hasCustomColor, groups }) {
+  return {
+    id, label, points,
+    ...(hasCustomColor ? { color } : {}),
+    ...(groups?.length ? { groups } : {}),
+  };
+}
 
 // Owns the SVG viewport (pan/zoom/fly-to) and plot selection/editing. The
 // polygons themselves are rendered as React <Plot> components (see
@@ -17,11 +29,10 @@ import { usePlotCanvas } from './usePlotCanvas';
 // unlabeled, some detected "plots" are really two parcels merged into one
 // closed path, and some real parcels are missed entirely - so labeling and
 // cleanup happen here (renameLabel/deletePlot/addPlot) and are saved
-// straight back to `plotsPath` (the village's own -plots.json, resolved in
-// villages.js) via the dev-only /api/save-plots endpoint in vite.config.ts,
-// rather than into localStorage where the Python pipeline, git, and anyone
-// else opening the project would never see them.
-export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) {
+// straight back to Firestore (maps/{mapId}/plots/{plotId}, see
+// src/lib/plotsRepo.ts), one targeted write per edit, rather than into
+// localStorage where nothing but this browser would ever see them.
+export function usePlotMapEngine({ rawPlots, viewRef, calibration, mapId }) {
   const svgRef = useRef(null);
   const viewportRef = useRef(null);
   const overlayRef = useRef(null);
@@ -60,33 +71,20 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     setUnlabeledCount(plotsRef.current.filter((p) => !p.label).length);
   }, []);
 
-  // POST the current plots (stripped back to the on-disk {id, label, points}
-  // shape, plus a custom `color` only for plots that were given one - see
-  // setPlotColor - and `groups` only for plots that belong to at least one -
-  // see importGroup) to the dev server, which overwrites plotsPath with them
-  const persist = useCallback(async () => {
-    if (!plotsPath) return;
+  // Runs a single Firestore write (one plot, or a small batch of them) and
+  // reflects its outcome in saveStatus - every mutation below writes only
+  // the plot(s) it actually touched, not the whole map's plot array.
+  const runPersist = useCallback(async (op) => {
+    if (!mapId) return;
     setSaveStatus('saving');
     try {
-      const res = await fetch('/api/save-plots', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          relPath: plotsPath,
-          plots: plotsRef.current.map(({ id, label, points, color, hasCustomColor, groups }) => ({
-            id, label, points,
-            ...(hasCustomColor ? { color } : {}),
-            ...(groups?.length ? { groups } : {}),
-          })),
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
+      await op();
       setSaveStatus('idle');
     } catch (err) {
-      console.error('Failed to save', plotsPath, err);
+      console.error('Failed to save', mapId, err);
       setSaveStatus('error');
     }
-  }, [plotsPath]);
+  }, [mapId]);
 
   const refreshGroupList = useCallback(() => {
     const derived = summarizeGroups(plotsRef.current);
@@ -314,34 +312,36 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
   }, [rawPlots]);
 
   // hand-correct a plot's label (every plot starts unlabeled - see
-  // usePlotMapEngine's doc comment above), saved back to plotsPath
+  // usePlotMapEngine's doc comment above), saved back to Firestore
   const renameLabel = useCallback((plotId, newLabel) => {
     const trimmed = newLabel.trim();
     if (!trimmed) return;
     const next = plotsRef.current.map((p) => (p.id === plotId ? { ...p, label: trimmed } : p));
     plotsRef.current = next;
     setPlots(next);
+    const updated = next.find((p) => p.id === plotId);
     if (selectedIdRef.current === plotId) {
-      setSelectedPlot(next.find((p) => p.id === plotId) ?? null);
+      setSelectedPlot(updated ?? null);
     }
     refreshUnlabeledCount();
     scheduleRedraw();
-    persist();
-  }, [persist, refreshUnlabeledCount, scheduleRedraw]);
+    if (updated) runPersist(() => upsertPlot(mapId, toPlotDoc(updated)));
+  }, [mapId, runPersist, refreshUnlabeledCount, scheduleRedraw]);
 
-  // hand-pick a plot's fill color, saved back to plotsPath as an explicit
+  // hand-pick a plot's fill color, saved back to Firestore as an explicit
   // `color` field (plots without one keep cycling through the default
   // palette by position, so this only needs to persist the overrides)
   const setPlotColor = useCallback((plotId, color) => {
     const next = plotsRef.current.map((p) => (p.id === plotId ? { ...p, color, hasCustomColor: true } : p));
     plotsRef.current = next;
     setPlots(next);
+    const updated = next.find((p) => p.id === plotId);
     if (selectedIdRef.current === plotId) {
-      setSelectedPlot(next.find((p) => p.id === plotId) ?? null);
+      setSelectedPlot(updated ?? null);
     }
     scheduleRedraw();
-    persist();
-  }, [persist, scheduleRedraw]);
+    if (updated) runPersist(() => upsertPlot(mapId, toPlotDoc(updated)));
+  }, [mapId, runPersist, scheduleRedraw]);
 
   // remove a plot - for shapes that turned out to be two parcels merged
   // into one closed path, stray non-parcel shapes that slipped through
@@ -359,8 +359,8 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     refreshUnlabeledCount();
     refreshGroupList();
     scheduleRedraw();
-    persist();
-  }, [updateOverlay, persist, refreshUnlabeledCount, refreshGroupList, scheduleRedraw]);
+    runPersist(() => deletePlotDoc(mapId, plotId));
+  }, [updateOverlay, mapId, runPersist, refreshUnlabeledCount, refreshGroupList, scheduleRedraw]);
 
   // tag every plot whose label matches a number from an imported CSV/Excel
   // file with a named, colored group (see helpers/parsePlotNumbers.js) -
@@ -382,8 +382,9 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
       setSelectedPlot(next.find((p) => p.id === selectedIdRef.current) ?? null);
     }
     scheduleRedraw();
-    persist();
-  }, [refreshGroupList, persist, scheduleRedraw]);
+    const touched = next.filter((p) => idSet.has(p.id)).map(toPlotDoc);
+    runPersist(() => upsertPlotsBatch(mapId, touched));
+  }, [mapId, runPersist, refreshGroupList, scheduleRedraw]);
 
   // start a named, colored group with no plots yet - tracked in
   // manualGroupsRef so it shows up (0 count) in groupList until
@@ -415,12 +416,13 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     plotsRef.current = next;
     setPlots(next);
     refreshGroupList();
+    const updated = next.find((p) => p.id === plotId);
     if (selectedIdRef.current === plotId) {
-      setSelectedPlot(next.find((p) => p.id === plotId) ?? null);
+      setSelectedPlot(updated ?? null);
     }
     scheduleRedraw();
-    persist();
-  }, [refreshGroupList, persist, scheduleRedraw]);
+    if (updated) runPersist(() => upsertPlot(mapId, toPlotDoc(updated)));
+  }, [mapId, runPersist, refreshGroupList, scheduleRedraw]);
 
   // undo a single plot's membership in one group, leaving the group (and its
   // other members) otherwise intact - the group only disappears once every
@@ -435,12 +437,13 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     plotsRef.current = next;
     setPlots(next);
     refreshGroupList();
+    const updated = next.find((p) => p.id === plotId);
     if (selectedIdRef.current === plotId) {
-      setSelectedPlot(next.find((p) => p.id === plotId) ?? null);
+      setSelectedPlot(updated ?? null);
     }
     scheduleRedraw();
-    persist();
-  }, [refreshGroupList, persist, scheduleRedraw]);
+    if (updated) runPersist(() => upsertPlot(mapId, toPlotDoc(updated)));
+  }, [mapId, runPersist, refreshGroupList, scheduleRedraw]);
 
   // show/hide a group's color overlay on the map without touching membership
   // - just flips which group names are considered "active", which the
@@ -456,6 +459,9 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
   // un-tag every plot in a group entirely (the group disappears once no
   // plot references it - there's nothing else to clean up)
   const removeGroup = useCallback((name) => {
+    const touchedIds = new Set(
+      plotsRef.current.filter((p) => p.groups?.some((g) => g.name === name)).map((p) => p.id)
+    );
     const next = plotsRef.current.map((p) => {
       if (!p.groups?.some((g) => g.name === name)) return p;
       const remaining = p.groups.filter((g) => g.name !== name);
@@ -473,8 +479,9 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
       setSelectedPlot(next.find((p) => p.id === selectedIdRef.current) ?? null);
     }
     scheduleRedraw();
-    persist();
-  }, [refreshGroupList, persist, scheduleRedraw]);
+    const touched = next.filter((p) => touchedIds.has(p.id)).map(toPlotDoc);
+    if (touched.length) runPersist(() => upsertPlotsBatch(mapId, touched));
+  }, [mapId, runPersist, refreshGroupList, scheduleRedraw]);
 
   // add a hand-drawn plot (see startDrawing/finishDrawing below), numbered
   // to continue on from the highest existing id
@@ -507,8 +514,8 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, plotsPath }) 
     setPlotCount(next.length);
     refreshUnlabeledCount();
     selectPlot(plot, false);
-    persist();
-  }, [selectPlot, persist, refreshUnlabeledCount]);
+    runPersist(() => upsertPlot(mapId, toPlotDoc(plot)));
+  }, [selectPlot, mapId, runPersist, refreshUnlabeledCount]);
 
   // click-to-place-corners drawing mode for plots the extraction missed.
   // Existing polygons are made pointer-events:none for the duration so that

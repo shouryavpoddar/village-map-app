@@ -8,7 +8,13 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "emulators": "firebase emulators:start --project demo-village-map",
+    "migrate:emulator": "node scripts/migrate-to-firestore.mjs --target=emulator",
+    "migrate:prod": "node scripts/migrate-to-firestore.mjs --target=prod",
+    "sync:push": "node scripts/sync-firestore.mjs --from=emulator --to=prod",
+    "sync:pull": "node scripts/sync-firestore.mjs --from=prod --to=emulator",
+    "replace-map": "node scripts/replace-map.mjs"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",
@@ -18,6 +24,8 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "firebase-admin": "^14.1.0",
+    "firebase-tools": "^15.23.0",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4.3.2",
     "typescript": "~6.0.2",
@@ -25,6 +33,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "firebase": "^12.16.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "xlsx": "^0.18.5"

@@ -17,6 +17,15 @@ dist-ssr
 __pycache__
 *.pyc
 
+# Firebase - service account keys must never be committed; emulator debug
+# logs and local export snapshots are machine-local artifacts
+.secrets/
+*service-account*.json
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+.firebase-emulator-data/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

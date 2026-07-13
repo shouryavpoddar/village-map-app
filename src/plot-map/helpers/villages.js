@@ -1,6 +1,12 @@
+import { computeMapId } from './mapIdentity';
+
 // Villages are whatever plot JSON files have been dropped under src/assets -
 // scanned broadly (not tied to one folder name) since files have ended up
-// scattered across a few differently-named subfolders.
+// scattered across a few differently-named subfolders. The plot JSON itself
+// is no longer loaded from here (plots live in Firestore - see
+// src/lib/plotsRepo.ts) - this glob is used only to enumerate which maps
+// exist and derive their identity/paths, exactly like the image/rect globs
+// below.
 const plotModules = import.meta.glob([
   '../../assets/**/*.json',
   '!../../assets/**/*-rect.json',
@@ -63,14 +69,16 @@ const looseRectsByKey = new Map(
 
 // `path` is relative to this file (src/plot-map/helpers/villages.js), two
 // directories below the project root - rewriting its "../../" prefix to
-// "src/" gives the project-root-relative path the save-plots dev server
-// middleware (see vite.config.ts) needs to write edits back to the right file.
+// "src/" gives the project-root-relative path used as this map's stable
+// identity (see computeMapId) - matching what the migration/sync scripts
+// derive from the same on-disk file, so the frontend and Firestore always
+// agree on which map is which.
 function toProjectPath(path) {
   return path.replace(/^(\.\.\/)+/, 'src/');
 }
 
 const MAPS = Object.entries(plotModules)
-  .map(([path, load]) => {
+  .map(([path]) => {
     const dir = dirOf(path);
     // Name-derived key, used only to group by town and to match loose
     // (non-co-located) image/rect files - not this map's identity, since
@@ -81,9 +89,9 @@ const MAPS = Object.entries(plotModules)
     const plotsPath = toProjectPath(path);
     return {
       key: plotsPath,
+      mapId: computeMapId(plotsPath),
       nameKey,
       townLabel: prettyName(nameKey),
-      loadPlots: () => load().then((m) => m.default),
       plotsPath,
       imageUrl: imagesByDirAndKey.get(`${dir} ${nameKey}`) ?? looseImagesByKey.get(nameKey) ?? null,
       imageRect: rectsByDirAndKey.get(`${dir} ${nameKey}`) ?? looseRectsByKey.get(nameKey) ?? null,
