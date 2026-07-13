@@ -3,6 +3,7 @@ import { useCalibration } from './plot-map/hooks/useCalibration';
 import { usePlotMapEngine } from './plot-map/hooks/usePlotMapEngine';
 import { useSearch } from './plot-map/hooks/useSearch';
 import { TOWNS } from './plot-map/helpers/villages';
+import { loadMapPlots } from './lib/plotsRepo';
 import MapCanvas from './plot-map/components/MapCanvas';
 import Sidebar from './plot-map/components/Sidebar';
 
@@ -42,7 +43,7 @@ export default function PlotMap() {
     if (!map) { setRawPlots([]); return; }
     let cancelled = false;
     setRawPlots(null); // loading
-    map.loadPlots().then((plots) => {
+    loadMapPlots(map.mapId).then((plots) => {
       if (!cancelled) setRawPlots(plots);
     });
     return () => { cancelled = true; };
@@ -58,7 +59,7 @@ export default function PlotMap() {
     rawPlots: rawPlots ?? EMPTY_PLOTS,
     viewRef,
     calibration,
-    plotsPath: map?.plotsPath,
+    mapId: map?.mapId,
   });
   const search = useSearch({ plotsRef: engine.plotsRef, selectPlot: engine.selectPlot });
 
