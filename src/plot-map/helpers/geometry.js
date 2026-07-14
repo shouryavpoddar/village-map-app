@@ -25,6 +25,25 @@ export function bboxOf(pts) {
   return { minX, minY, maxX, maxY };
 }
 
+// A village's plots are digitized from its own PDF survey sheet in that
+// sheet's arbitrary local units - there's no shared scale between villages.
+// Plots tagged with a known real-world area (see Plot.realAreaSqM,
+// plotsRepo.ts) give us a reference: since area scales with the square of
+// the linear scale factor, sqrt(real/computed) per tagged plot is that
+// village's unit->meter conversion, and averaging across every tagged plot
+// smooths out digitization error in any single one. A village with no
+// tagged plots yet has no reference and stays at its native scale (1).
+export function computeVillageScale(plots) {
+  const ratios = [];
+  for (const p of plots) {
+    if (p.realAreaSqM == null) continue;
+    const computed = shoelaceArea(p.points);
+    if (computed > 0) ratios.push(Math.sqrt(p.realAreaSqM / computed));
+  }
+  if (!ratios.length) return 1;
+  return ratios.reduce((sum, r) => sum + r, 0) / ratios.length;
+}
+
 // Even-odd ray casting - used for canvas hit-testing, where (unlike SVG)
 // there's no native per-shape point containment the browser gives us for free
 export function pointInPolygon(x, y, pts) {

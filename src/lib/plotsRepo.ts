@@ -1,4 +1,4 @@
-import { collection, deleteDoc, doc, getDocs, setDoc, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, writeBatch } from 'firebase/firestore';
 import { db, isReadOnlyRemote } from './firebase';
 
 // Blocks every write when running locally against a non-emulator project
@@ -24,6 +24,11 @@ export interface Plot {
   points: [number, number][];
   color?: string;
   groups?: PlotGroup[];
+  // Real-world area in square meters, transcribed from a Form-7 land record.
+  // Used to derive a village's scale factor for the combined multi-village
+  // view (see computeVillageScale in plot-map/helpers/geometry.js) - most
+  // plots won't have this set, only whichever ones the user has looked up.
+  realAreaSqM?: number;
 }
 
 // Firestore doesn't allow arrays nested directly inside arrays, so `points`
@@ -41,6 +46,39 @@ function decodePlot(data: Record<string, unknown>): Plot {
 
 // Firestore's writeBatch caps out at 500 operations per commit.
 const BATCH_LIMIT = 500;
+
+// A village's manually-dragged position in the combined "All Villages" view
+// (see plot-map/hooks/useVillageArrangement.js) - lives as fields on the
+// map's own doc, not its `plots` subcollection, since it describes the
+// village as a whole rather than any one plot. `rotation` (radians) is only
+// ever set by a precise anchor-plot fit (two sheets sharing a real plot in
+// common - see useAllVillages.js), never by the drag UI, which only ever
+// adjusts offsetX/offsetY on top of whatever rotation is already saved.
+export interface MapArrangement {
+  offsetX: number;
+  offsetY: number;
+  rotation?: number;
+}
+
+function mapDoc(mapId: string) {
+  return doc(db, 'maps', mapId);
+}
+
+export async function loadMapArrangement(mapId: string): Promise<MapArrangement | null> {
+  const snapshot = await getDoc(mapDoc(mapId));
+  const data = snapshot.data();
+  if (!data || typeof data.offsetX !== 'number' || typeof data.offsetY !== 'number') return null;
+  return {
+    offsetX: data.offsetX,
+    offsetY: data.offsetY,
+    ...(typeof data.rotation === 'number' ? { rotation: data.rotation } : {}),
+  };
+}
+
+export async function saveMapArrangement(mapId: string, arrangement: MapArrangement): Promise<void> {
+  assertWritable();
+  await setDoc(mapDoc(mapId), arrangement, { merge: true });
+}
 
 function plotsCollection(mapId: string) {
   return collection(db, 'maps', mapId, 'plots');

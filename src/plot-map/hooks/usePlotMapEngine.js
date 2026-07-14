@@ -8,11 +8,12 @@ import { deletePlotDoc, upsertPlot, upsertPlotsBatch } from '../../lib/plotsRepo
 // Strips a processed plot (with derived fields like area/centroid/bbox) back
 // to the on-disk/Firestore shape - {color}/{groups} are only included when
 // actually set, so plots without an override don't carry dead fields.
-function toPlotDoc({ id, label, points, color, hasCustomColor, groups }) {
+function toPlotDoc({ id, label, points, color, hasCustomColor, groups, realAreaSqM }) {
   return {
     id, label, points,
     ...(hasCustomColor ? { color } : {}),
     ...(groups?.length ? { groups } : {}),
+    ...(realAreaSqM != null ? { realAreaSqM } : {}),
   };
 }
 
@@ -275,6 +276,7 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, mapId }) {
         color: p.color ?? PALETTE[idx % PALETTE.length],
         hasCustomColor: p.color != null,
         groups: p.groups,
+        realAreaSqM: p.realAreaSqM,
       };
     });
     plotsRef.current = processed;
@@ -342,6 +344,21 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, mapId }) {
     scheduleRedraw();
     if (updated) runPersist(() => upsertPlot(mapId, toPlotDoc(updated)));
   }, [mapId, runPersist, scheduleRedraw]);
+
+  // hand-transcribed real-world area (sq. m) from a Form-7 land record, used
+  // to derive a village's scale factor in the combined multi-village view
+  // (see computeVillageScale in helpers/geometry.js) - `null` clears it back
+  // to "unknown" rather than persisting a stale figure
+  const setPlotRealArea = useCallback((plotId, realAreaSqM) => {
+    const next = plotsRef.current.map((p) => (p.id === plotId ? { ...p, realAreaSqM } : p));
+    plotsRef.current = next;
+    setPlots(next);
+    const updated = next.find((p) => p.id === plotId);
+    if (selectedIdRef.current === plotId) {
+      setSelectedPlot(updated ?? null);
+    }
+    if (updated) runPersist(() => upsertPlot(mapId, toPlotDoc(updated)));
+  }, [mapId, runPersist]);
 
   // remove a plot - for shapes that turned out to be two parcels merged
   // into one closed path, stray non-parcel shapes that slipped through
@@ -676,6 +693,7 @@ export function usePlotMapEngine({ rawPlots, viewRef, calibration, mapId }) {
     plotsRef, viewRef, plots, selectedIdRef,
     selectedPlot, plotCount, unlabeledCount, saveStatus,
     fitAll, zoomAt, zoomButtonCenter, selectPlot, renameLabel, deletePlot, setPlotColor,
+    setPlotRealArea,
     focusNextUnlabeled,
     drawing, drawPoints, startDrawing, cancelDrawing, finishDrawing, undoDrawPoint,
     groupList, visibleGroups, importGroup, toggleGroup, removeGroup,

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Card, DetailRow, Badge, ColorSwatch, Button, Select } from '../../ui';
 
-export default function PlotDetailCard({ plot, groupList, onRename, onDelete, onColorChange, onAddToGroup, onRemoveFromGroup }) {
+export default function PlotDetailCard({ plot, groupList, onRename, onDelete, onColorChange, onSetRealArea, onAddToGroup, onRemoveFromGroup }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(plot.label);
+  const [editingArea, setEditingArea] = useState(false);
+  const [areaDraft, setAreaDraft] = useState(plot.realAreaSqM ?? '');
 
   const memberNames = new Set((plot.groups ?? []).map((g) => g.name));
   const joinableGroups = (groupList ?? []).filter((g) => !memberNames.has(g.name));
@@ -11,13 +13,33 @@ export default function PlotDetailCard({ plot, groupList, onRename, onDelete, on
   useEffect(() => {
     setDraft(plot.label);
     setEditing(false);
-  }, [plot.id, plot.label]);
+    setAreaDraft(plot.realAreaSqM ?? '');
+    setEditingArea(false);
+  }, [plot.id, plot.label, plot.realAreaSqM]);
 
   const commit = () => {
     setEditing(false);
     const trimmed = draft.trim();
     if (trimmed && trimmed !== plot.label) onRename(plot.id, trimmed);
     else setDraft(plot.label);
+  };
+
+  // Transcribed from a Form-7 land record (see PDF samples in project chat) -
+  // used to derive a village's scale factor in the combined map view.
+  // Blank clears it back to "unknown" rather than persisting a stale figure.
+  const commitArea = () => {
+    setEditingArea(false);
+    const trimmed = String(areaDraft).trim();
+    if (!trimmed) {
+      if (plot.realAreaSqM != null) onSetRealArea(plot.id, null);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed) && parsed > 0 && parsed !== plot.realAreaSqM) {
+      onSetRealArea(plot.id, parsed);
+    } else {
+      setAreaDraft(plot.realAreaSqM ?? '');
+    }
   };
 
   const handleDelete = () => {
@@ -52,6 +74,32 @@ export default function PlotDetailCard({ plot, groupList, onRename, onDelete, on
       <p className="text-[11px] text-stamp tracking-[0.06em] mb-[14px]">PLOT ID · {plot.id}</p>
 
       <DetailRow label="Area" value={`${plot.area.toFixed(1)} sq. units`} />
+      <DetailRow label="Real area" divider>
+        {editingArea ? (
+          <input
+            autoFocus
+            type="number"
+            min="0"
+            step="any"
+            className="w-[90px] text-right bg-paper border border-stamp px-1 outline-none"
+            value={areaDraft}
+            onChange={(e) => setAreaDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitArea();
+              if (e.key === 'Escape') { setAreaDraft(plot.realAreaSqM ?? ''); setEditingArea(false); }
+            }}
+            onBlur={commitArea}
+          />
+        ) : (
+          <span
+            className={`cursor-text hover:underline decoration-dashed decoration-1 underline-offset-4 ${plot.realAreaSqM == null ? 'text-ink-soft italic' : ''}`}
+            title="Click to set the real-world area (sq. m) from a land record"
+            onClick={() => setEditingArea(true)}
+          >
+            {plot.realAreaSqM != null ? `${plot.realAreaSqM.toFixed(1)} sq. m` : 'unknown'}
+          </span>
+        )}
+      </DetailRow>
       <DetailRow label="Vertices" value={plot.points.length} />
       <DetailRow label="Centroid" value={`${plot.centroid[0].toFixed(1)}, ${plot.centroid[1].toFixed(1)}`} />
       <DetailRow label="Bounding box" value={`${(plot.bbox.maxX - plot.bbox.minX).toFixed(0)} × ${(plot.bbox.maxY - plot.bbox.minY).toFixed(0)}`} />
